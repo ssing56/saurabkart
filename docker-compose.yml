@@ -1,0 +1,57 @@
+services:
+
+  # ==============================
+  # MongoDB
+  # ==============================
+  mongodb:
+    image: mongo:7
+    container_name: saurabkart-mongodb
+    restart: unless-stopped
+
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - type: volume
+        source: mongodb_data
+        target: /data/db
+
+  # ==============================
+  # Backend
+  # ==============================
+  backend:
+    image: saurabkart-backend:1.1
+    container_name: saurabkart-backend
+    restart: unless-stopped
+
+    environment:
+      PORT: 5000
+      MONGO_URI: mongodb://mongodb:27017/saurabkart
+
+    ports:
+      - "5000:5000"
+
+    depends_on:
+      - mongodb
+
+  # ==============================
+  # Frontend
+  # ==============================
+  frontend:
+    image: saurabkart-frontend:1.0
+    container_name: saurabkart-frontend
+    restart: unless-stopped
+
+    ports:
+      - "8080:80"
+
+    depends_on:
+      - backend
+
+# ==============================
+# Persistent MongoDB Storage
+# ==============================
+volumes:
+  mongodb_data:
+    external: true
+    name: saurabkart-mongo-data
