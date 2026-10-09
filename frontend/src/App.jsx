@@ -9,85 +9,73 @@ const categories = [
   "Electronics",
   "Mobiles",
   "Fashion",
-  "Home",
   "Accessories",
+  "Home",
+  "Beauty",
+  "Sports",
+  "Books",
 ];
 
-const money = (amount) =>
-  new Intl.NumberFormat("en-IN", {
+function formatPrice(price) {
+  return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 2,
-  }).format(Number(amount) || 0);
-
-function getCategory(product) {
-  const value = String(product.category || "").toLowerCase();
-
-  if (value.includes("mobile") || value.includes("phone")) return "Mobiles";
-  if (value.includes("electronic") || value.includes("laptop")) return "Electronics";
-  if (value.includes("fashion") || value.includes("cloth") || value.includes("shoe")) return "Fashion";
-  if (value.includes("home") || value.includes("kitchen")) return "Home";
-  if (value.includes("accessor")) return "Accessories";
-
-  return product.category || "Other";
+    maximumFractionDigits: 0,
+  }).format(Number(price) || 0);
 }
 
 function ProductImage({ product }) {
   const [imageFailed, setImageFailed] = useState(false);
 
-  const image = product.image;
-  const category = getCategory(product).toLowerCase();
+  const categoryIcons = {
+    Electronics: "💻",
+    Mobiles: "📱",
+    Fashion: "👕",
+    Accessories: "⌚",
+    Home: "🏠",
+    Beauty: "✨",
+    Sports: "⚽",
+    Books: "📚",
+  };
 
-  const emoji = category.includes("mobile")
-    ? "📱"
-    : category.includes("electronic")
-      ? "🎧"
-      : category.includes("fashion")
-        ? "👕"
-        : category.includes("home")
-          ? "🏠"
-          : category.includes("accessor")
-            ? "⌚"
-            : "🛍️";
-
-  if (image && !imageFailed) {
+  if (!product.image || imageFailed) {
     return (
-      <div className="product-image">
-        <img
-          src={image}
-          alt={product.name}
-          loading="lazy"
-          onError={() => setImageFailed(true)}
-        />
+      <div className="product-image product-image-fallback">
+        <span>{categoryIcons[product.category] || "🛍️"}</span>
       </div>
     );
   }
 
   return (
-    <div className="product-image image-placeholder">
-      <span>{emoji}</span>
+    <div className="product-image">
+      <img
+        src={product.image}
+        alt={product.name}
+        loading="lazy"
+        onError={() => setImageFailed(true)}
+      />
     </div>
   );
 }
 
-function App() {
+export default function App() {
   const [products, setProducts] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [activeCategory, setActiveCategory] = useState("All");
-  const [cart, setCart] = useState([]);
-  const [cartOpen, setCartOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    const controller = new AbortController();
+    let active = true;
 
     async function loadProducts() {
       try {
-        const response = await fetch(`${API_URL}/api/products`, {
-          signal: controller.signal,
-        });
+        setLoading(true);
+        setError("");
+
+        const response = await fetch(`${API_URL}/api/products`);
 
         if (!response.ok) {
           throw new Error(`Products API returned ${response.status}`);
@@ -96,79 +84,98 @@ function App() {
         const data = await response.json();
 
         if (!Array.isArray(data)) {
-          throw new Error("Invalid products API response");
+          throw new Error("Invalid products response from server");
         }
 
-        setProducts(data);
-        setError("");
+        if (active) {
+          setProducts(data);
+        }
       } catch (err) {
-        if (err.name !== "AbortError") {
-          console.error("Product loading failed:", err);
-          setError("Products load nahi ho paaye. Please try again.");
+        if (active) {
+          setError(
+            "Products load nahi ho paaye. Please internet aur backend check karein."
+          );
+          console.error("Products loading error:", err);
         }
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
     loadProducts();
-    return () => controller.abort();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const filteredProducts = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
+    const searchText = search.trim().toLowerCase();
 
     return products.filter((product) => {
-      const matchesSearch =
-        !query ||
-        product.name?.toLowerCase().includes(query) ||
-        product.description?.toLowerCase().includes(query) ||
-        product.category?.toLowerCase().includes(query);
+      const categoryMatch =
+        selectedCategory === "All" ||
+        String(product.category || "").toLowerCase() ===
+          selectedCategory.toLowerCase();
 
-      const matchesCategory =
-        activeCategory === "All" ||
-        getCategory(product).toLowerCase() === activeCategory.toLowerCase();
+      const searchMatch =
+        !searchText ||
+        [
+          product.name,
+          product.description,
+          product.category,
+        ].some((value) =>
+          String(value || "").toLowerCase().includes(searchText)
+        );
 
-      return matchesSearch && matchesCategory;
+      return categoryMatch && searchMatch;
     });
-  }, [products, searchTerm, activeCategory]);
+  }, [products, selectedCategory, search]);
 
-  const cartCount = cart.reduce((total, item) => total + item.quantity, 0);
+  const cartCount = cart.reduce(
+    (total, item) => total + item.quantity,
+    0
+  );
 
   const cartTotal = cart.reduce(
-    (total, item) => total + Number(item.price) * item.quantity,
+    (total, item) => total + item.price * item.quantity,
     0
   );
 
   function addToCart(product) {
-    if (!product._id) {
-      setNotice("Is product ki ID available nahi hai.");
-      return;
-    }
+    setCart((currentCart) => {
+      const existingItem = currentCart.find(
+        (item) => item._id === product._id
+      );
 
-    setCart((current) => {
-      const existing = current.find((item) => item._id === product._id);
-
-      if (existing) {
-        return current.map((item) =>
+      if (existingItem) {
+        return currentCart.map((item) =>
           item._id === product._id
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
 
-      return [...current, { ...product, quantity: 1 }];
+      return [
+        ...currentCart,
+        {
+          ...product,
+          price: Number(product.price) || 0,
+          quantity: 1,
+        },
+      ];
     });
 
     setNotice(`${product.name} cart mein add ho gaya.`);
-    setCartOpen(true);
   }
 
-  function changeQuantity(id, change) {
-    setCart((current) =>
-      current
+  function changeQuantity(productId, change) {
+    setCart((currentCart) =>
+      currentCart
         .map((item) =>
-          item._id === id
+          item._id === productId
             ? { ...item, quantity: item.quantity + change }
             : item
         )
@@ -176,142 +183,167 @@ function App() {
     );
   }
 
-  function removeFromCart(id) {
-    setCart((current) => current.filter((item) => item._id !== id));
+  function removeFromCart(productId) {
+    setCart((currentCart) =>
+      currentCart.filter((item) => item._id !== productId)
+    );
   }
 
   function handleCheckout() {
+    if (cart.length === 0) {
+      setNotice("Checkout se pehle cart mein products add karein.");
+      return;
+    }
+
     setNotice(
-      "Cart ready hai. Razorpay checkout hum next step mein securely integrate karenge."
+      "Cart ready hai. Online payment aur order placement abhi integrate nahi hain."
     );
   }
 
   return (
     <div className="app">
-      <div className="top-strip">
-        Welcome to SaurabKart — Smart shopping, great value!
-      </div>
-
-      <header className="navbar">
-        <a className="logo" href="#" aria-label="SaurabKart home">
-          <span className="logo-icon">S</span>
-          <span>Saurab<span className="logo-accent">Kart</span></span>
+      <header className="top-header">
+        <a
+          className="brand"
+          href="#home"
+          onClick={() => {
+            setSelectedCategory("All");
+            setSearch("");
+          }}
+        >
+          <span className="brand-icon">🛍️</span>
+          <span>
+            Saurab<span className="brand-highlight">Kart</span>
+          </span>
         </a>
 
-        <form
-          className="search-box"
-          onSubmit={(event) => event.preventDefault()}
-        >
-          <span className="search-icon">⌕</span>
+        <div className="header-search">
           <input
             type="search"
-            placeholder="Search mobiles, electronics, fashion..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search products, brands and more..."
             aria-label="Search products"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
           />
-          {searchTerm && (
-            <button
-              type="button"
-              className="clear-search"
-              onClick={() => setSearchTerm("")}
-              aria-label="Clear search"
-            >
-              ×
-            </button>
-          )}
-          <button className="search-submit" type="submit">Search</button>
-        </form>
+          <button
+            type="button"
+            className="search-button"
+            aria-label="Search"
+          >
+            🔍
+          </button>
+        </div>
 
-        <button
-          className="header-action"
-          type="button"
-          onClick={() => setNotice("Login feature next phase mein add hoga.")}
-        >
-          <span>♙</span>
-          <span>Account</span>
-        </button>
-
-        <button
-          className="cart-action"
-          type="button"
-          onClick={() => setCartOpen(true)}
-          aria-label={`Open cart, ${cartCount} items`}
-        >
-          <span className="cart-icon">🛒</span>
-          <span>Cart</span>
-          <span className="cart-count">{cartCount}</span>
-        </button>
+        <a className="cart-link" href="#cart">
+          🛒 Cart <span className="cart-count">{cartCount}</span>
+        </a>
       </header>
 
       <nav className="category-nav" aria-label="Product categories">
         {categories.map((category) => (
           <button
-            key={category}
             type="button"
-            className={activeCategory === category ? "category active" : "category"}
-            onClick={() => setActiveCategory(category)}
+            key={category}
+            className={
+              selectedCategory === category
+                ? "category-button active"
+                : "category-button"
+            }
+            onClick={() => setSelectedCategory(category)}
           >
             {category}
           </button>
         ))}
       </nav>
 
-      <main>
+      <main id="home">
         <section className="hero">
           <div className="hero-content">
-            <span className="hero-label">YOUR EVERYDAY SHOPPING DESTINATION</span>
-            <h1>Great deals.<br /><span>Better shopping.</span></h1>
-            <p>Discover products you love at prices you'll love even more.</p>
+            <span className="hero-tag">WELCOME TO SAURABKART</span>
+            <h1>Everything You Love, All in One Place.</h1>
+            <p>
+              Electronics se lekar fashion, home essentials aur books tak
+              — apni pasand ke products ek hi jagah explore karein.
+            </p>
             <button
               type="button"
               className="hero-button"
-              onClick={() =>
-                document.getElementById("products")?.scrollIntoView({
-                  behavior: "smooth",
-                })
-              }
+              onClick={() => {
+                setSelectedCategory("All");
+                document
+                  .getElementById("products")
+                  ?.scrollIntoView({ behavior: "smooth" });
+              }}
             >
-              Explore products <span>→</span>
+              Shop Now →
             </button>
-            <div className="hero-benefits">
-              <span>✓ Value for money</span>
-              <span>✓ Easy shopping</span>
-            </div>
           </div>
           <div className="hero-art" aria-hidden="true">
-            <div className="hero-circle">
-              <span className="hero-bag">🛍️</span>
-              <span className="floating-item item-one">🎧</span>
-              <span className="floating-item item-two">⌚</span>
-              <span className="floating-item item-three">👟</span>
-            </div>
-            <div className="deal-bubble">SMART<br />DEALS</div>
+            <span>🎧</span>
+            <span>👟</span>
+            <span>📱</span>
+            <span>⌚</span>
           </div>
-        </section>
-
-        <section className="benefit-row">
-          <div><span>🚚</span><div><strong>Convenient shopping</strong><small>Shop from anywhere</small></div></div>
-          <div><span>💎</span><div><strong>Great value</strong><small>Find your favourites</small></div></div>
-          <div><span>🔒</span><div><strong>Secure checkout</strong><small>Payment integration coming next</small></div></div>
         </section>
 
         <section className="products-section" id="products">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">HANDPICKED FOR YOU</span>
-              <h2>{activeCategory === "All" ? "Popular Products" : activeCategory}</h2>
-              <p>Explore our collection and find your next favourite.</p>
+              <p className="section-eyebrow">OUR COLLECTION</p>
+              <h2>
+                {selectedCategory === "All"
+                  ? "Explore Products"
+                  : selectedCategory}
+              </h2>
+              <p className="product-count">
+                {loading
+                  ? "Products load ho rahe hain..."
+                  : `${filteredProducts.length} products found`}
+              </p>
             </div>
-            <span className="product-count">{filteredProducts.length} products</span>
+
+            <select
+              aria-label="Filter by category"
+              value={selectedCategory}
+              onChange={(event) => setSelectedCategory(event.target.value)}
+            >
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {loading && <div className="status">Loading products...</div>}
+          {notice && (
+            <div className="notice" role="status">
+              <span>{notice}</span>
+              <button
+                type="button"
+                onClick={() => setNotice("")}
+                aria-label="Dismiss notification"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          {loading && (
+            <div className="empty-state">
+              <span className="loading-spinner" />
+              <p>Products load ho rahe hain...</p>
+            </div>
+          )}
 
           {!loading && error && (
-            <div className="status error" role="alert">
-              {error}
-              <button onClick={() => window.location.reload()} type="button">
+            <div className="empty-state">
+              <h3>Something went wrong</h3>
+              <p>{error}</p>
+              <button
+                type="button"
+                className="add-button"
+                onClick={() => window.location.reload()}
+              >
                 Retry
               </button>
             </div>
@@ -321,19 +353,16 @@ function App() {
             <div className="empty-state">
               <span>🔎</span>
               <h3>No products found</h3>
-              <p>
-                {products.length === 0
-                  ? "Your product catalogue is empty. Add products to MongoDB first."
-                  : "Try a different search or category."}
-              </p>
+              <p>Search badlein ya doosri category select karein.</p>
               <button
                 type="button"
+                className="add-button"
                 onClick={() => {
-                  setSearchTerm("");
-                  setActiveCategory("All");
+                  setSearch("");
+                  setSelectedCategory("All");
                 }}
               >
-                Show all products
+                Show All Products
               </button>
             </div>
           )}
@@ -343,19 +372,28 @@ function App() {
               {filteredProducts.map((product) => (
                 <article className="product-card" key={product._id}>
                   <ProductImage product={product} />
+
                   <div className="product-info">
-                    <span className="product-category">{getCategory(product)}</span>
-                    <h3 title={product.name}>{product.name}</h3>
+                    <span className="product-category">
+                      {product.category || "Other"}
+                    </span>
+
+                    <h3>{product.name}</h3>
+
                     <p className="product-description">
-                      {product.description || "Discover this product at SaurabKart."}
+                      {product.description || "Quality product from SaurabKart."}
                     </p>
-                    <div className="product-price">{money(product.price)}</div>
+
+                    <div className="product-price">
+                      {formatPrice(product.price)}
+                    </div>
+
                     <button
-                      className="add-button"
                       type="button"
+                      className="add-button"
                       onClick={() => addToCart(product)}
                     >
-                      <span>＋</span> Add to Cart
+                      + Add to Cart
                     </button>
                   </div>
                 </article>
@@ -363,115 +401,102 @@ function App() {
             </div>
           )}
         </section>
+
+        <section className="cart-section" id="cart">
+          <div className="section-heading">
+            <div>
+              <p className="section-eyebrow">YOUR SELECTION</p>
+              <h2>Your Shopping Cart ({cartCount})</h2>
+            </div>
+          </div>
+
+          {cart.length === 0 ? (
+            <div className="cart-empty">
+              <span>🛒</span>
+              <p>Your cart is empty. Add products to get started!</p>
+            </div>
+          ) : (
+            <div className="cart-content">
+              <div className="cart-items">
+                {cart.map((item) => (
+                  <div className="cart-item" key={item._id}>
+                    <div className="cart-item-info">
+                      <strong>{item.name}</strong>
+                      <span>{formatPrice(item.price)} each</span>
+                    </div>
+
+                    <div className="quantity-controls">
+                      <button
+                        type="button"
+                        onClick={() => changeQuantity(item._id, -1)}
+                        aria-label={`Decrease ${item.name} quantity`}
+                      >
+                        −
+                      </button>
+                      <span>{item.quantity}</span>
+                      <button
+                        type="button"
+                        onClick={() => changeQuantity(item._id, 1)}
+                        aria-label={`Increase ${item.name} quantity`}
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <strong className="cart-item-total">
+                      {formatPrice(item.price * item.quantity)}
+                    </strong>
+
+                    <button
+                      type="button"
+                      className="remove-button"
+                      onClick={() => removeFromCart(item._id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="cart-summary">
+                <h3>Order Summary</h3>
+                <div className="summary-row">
+                  <span>Items ({cartCount})</span>
+                  <span>{formatPrice(cartTotal)}</span>
+                </div>
+                <div className="summary-row">
+                  <span>Delivery</span>
+                  <span>Calculated at checkout</span>
+                </div>
+                <div className="summary-total">
+                  <span>Subtotal</span>
+                  <strong>{formatPrice(cartTotal)}</strong>
+                </div>
+                <button
+                  type="button"
+                  className="checkout-button"
+                  onClick={handleCheckout}
+                >
+                  Proceed to Checkout →
+                </button>
+                <p className="checkout-note">
+                  Online payment is not enabled yet.
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
       </main>
 
-      <footer className="footer">
-        <a className="logo footer-logo" href="#">
-          <span className="logo-icon">S</span>
-          <span>Saurab<span className="logo-accent">Kart</span></span>
+      <footer className="site-footer">
+        <a className="footer-brand" href="#home">
+          SaurabKart
         </a>
-        <p>Your shopping destination. Built with React, Node.js, MongoDB and AWS.</p>
-        <span>© {new Date().getFullYear()} SaurabKart</span>
+        <p>
+          Your everyday shopping destination.
+        </p>
+        <p>© {new Date().getFullYear()} SaurabKart. All rights reserved.</p>
       </footer>
-
-      {notice && (
-        <div className="notice" role="status">
-          <span>{notice}</span>
-          <button type="button" onClick={() => setNotice("")} aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      )}
-
-      {cartOpen && (
-        <div className="cart-overlay" onClick={() => setCartOpen(false)}>
-          <aside
-            className="cart-drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Shopping cart"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="cart-heading">
-              <div>
-                <span className="eyebrow">YOUR SHOPPING BAG</span>
-                <h2>My Cart ({cartCount})</h2>
-              </div>
-              <button
-                type="button"
-                className="close-cart"
-                onClick={() => setCartOpen(false)}
-                aria-label="Close cart"
-              >
-                ×
-              </button>
-            </div>
-
-            {cart.length === 0 ? (
-              <div className="empty-cart">
-                <span>🛒</span>
-                <h3>Your cart is empty</h3>
-                <p>Add products to start shopping.</p>
-                <button type="button" onClick={() => setCartOpen(false)}>
-                  Continue shopping
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="cart-items">
-                  {cart.map((item) => (
-                    <div className="cart-item" key={item._id}>
-                      <ProductImage product={item} />
-                      <div className="cart-item-info">
-                        <h3>{item.name}</h3>
-                        <strong>{money(item.price)}</strong>
-                        <div className="quantity-row">
-                          <button
-                            type="button"
-                            onClick={() => changeQuantity(item._id, -1)}
-                            aria-label={`Decrease ${item.name} quantity`}
-                          >−</button>
-                          <span>{item.quantity}</span>
-                          <button
-                            type="button"
-                            onClick={() => changeQuantity(item._id, 1)}
-                            aria-label={`Increase ${item.name} quantity`}
-                          >＋</button>
-                          <button
-                            type="button"
-                            className="remove-item"
-                            onClick={() => removeFromCart(item._id)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="cart-summary">
-                  <div><span>Subtotal</span><strong>{money(cartTotal)}</strong></div>
-                  <div><span>Delivery</span><strong>Calculated at checkout</strong></div>
-                  <div className="grand-total"><span>Total</span><strong>{money(cartTotal)}</strong></div>
-                  <button
-                    type="button"
-                    className="checkout-button"
-                    onClick={handleCheckout}
-                  >
-                    Proceed to Checkout →
-                  </button>
-                  <p className="checkout-note">
-                    Payment is not enabled yet. We will connect Razorpay in the next phase.
-                  </p>
-                </div>
-              </>
-            )}
-          </aside>
-        </div>
-      )}
     </div>
   );
 }
-
-export default App;
