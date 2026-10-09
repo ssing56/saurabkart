@@ -1,20 +1,30 @@
-
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
 
 const categories = [
-  "All",
-  "Electronics",
-  "Mobiles",
-  "Fashion",
-  "Accessories",
-  "Home",
-  "Beauty",
-  "Sports",
-  "Books",
+  { name: "All", icon: "✦" },
+  { name: "Electronics", icon: "💻" },
+  { name: "Mobiles", icon: "📱" },
+  { name: "Fashion", icon: "👕" },
+  { name: "Accessories", icon: "⌚" },
+  { name: "Home", icon: "🏠" },
+  { name: "Beauty", icon: "✨" },
+  { name: "Sports", icon: "⚽" },
+  { name: "Books", icon: "📚" },
 ];
+
+const categoryColors = {
+  Electronics: "blue",
+  Mobiles: "violet",
+  Fashion: "pink",
+  Accessories: "amber",
+  Home: "green",
+  Beauty: "rose",
+  Sports: "orange",
+  Books: "cyan",
+};
 
 function formatPrice(price) {
   return new Intl.NumberFormat("en-IN", {
@@ -24,6 +34,18 @@ function formatPrice(price) {
   }).format(Number(price) || 0);
 }
 
+async function readResponse(response) {
+  const text = await response.text();
+
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(
+      "Server se valid JSON response nahi mila. Backend API aur deployment check karein."
+    );
+  }
+}
+
 function loadRazorpayScript() {
   return new Promise((resolve) => {
     if (window.Razorpay) {
@@ -31,22 +53,19 @@ function loadRazorpayScript() {
       return;
     }
 
-    const existingScript = document.querySelector(
-      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
-    );
+    const scriptUrl = "https://checkout.razorpay.com/v1/checkout.js";
+    let script = document.querySelector(`script[src="${scriptUrl}"]`);
 
-    if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(true), {
-        once: true,
-      });
-      existingScript.addEventListener("error", () => resolve(false), {
-        once: true,
-      });
+    if (script) {
+      script.addEventListener("load", () => resolve(true), { once: true });
+      script.addEventListener("error", () => resolve(false), { once: true });
+
+      if (window.Razorpay) resolve(true);
       return;
     }
 
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script = document.createElement("script");
+    script.src = scriptUrl;
     script.async = true;
     script.onload = () => resolve(true);
     script.onerror = () => resolve(false);
@@ -55,7 +74,7 @@ function loadRazorpayScript() {
 }
 
 function ProductImage({ product }) {
-  const [imageFailed, setImageFailed] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const icons = {
     Electronics: "💻",
@@ -68,22 +87,49 @@ function ProductImage({ product }) {
     Books: "📚",
   };
 
-  if (!product.image || imageFailed) {
-    return (
-      <div className="product-image product-image-fallback">
-        <span>{icons[product.category] || "🛍️"}</span>
-      </div>
-    );
-  }
+  useEffect(() => {
+    setFailed(false);
+  }, [product.image]);
 
   return (
-    <div className="product-image">
-      <img
-        src={product.image}
-        alt={product.name}
-        loading="lazy"
-        onError={() => setImageFailed(true)}
-      />
+    <div
+      className={`product-photo ${
+        failed || !product.image ? "product-photo-fallback" : ""
+      }`}
+    >
+      {product.image && !failed ? (
+        <img
+          src={product.image}
+          alt={product.name || "SaurabKart product"}
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="fallback-emoji">
+          {icons[product.category] || "🛍️"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Toast({ message, type, onClose }) {
+  if (!message) return null;
+
+  return (
+    <div className={`toast toast-${type || "info"}`} role="status">
+      <span className="toast-icon">
+        {type === "success" ? "✓" : type === "error" ? "!" : "i"}
+      </span>
+      <span>{message}</span>
+      <button
+        className="toast-close"
+        type="button"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
     </div>
   );
 }
@@ -97,6 +143,24 @@ export default function App() {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
+  const getViewFromHash = () => {
+    const hash = window.location.hash.toLowerCase();
+    if (hash.includes("payment-success")) return "success";
+    if (hash.includes("cart")) return "cart";
+    return "home";
+  };
+
+  const [view, setView] = useState(getViewFromHash);
+
+  useEffect(() => {
+    const updateView = () => {
+      setView(getViewFromHash());
+    };
+
+    window.addEventListener("hashchange", updateView);
+    return () => window.removeEventListener("hashchange", updateView);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -109,22 +173,21 @@ export default function App() {
         const response = await fetch(`${API_URL}/api/products`);
 
         if (!response.ok) {
-          throw new Error("Products API request failed");
+          throw new Error(`Products API returned ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await readResponse(response);
 
         if (!Array.isArray(data)) {
-          throw new Error("Invalid products response");
+          throw new Error("Products API ka response invalid hai.");
         }
 
         if (active) setProducts(data);
       } catch (err) {
         console.error("Products loading error:", err);
-
         if (active) {
           setError(
-            "Products load nahi ho paaye. Backend aur internet connection check karein."
+            "Products load nahi ho paaye. Internet connection aur backend API check karein."
           );
         }
       } finally {
@@ -150,8 +213,8 @@ export default function App() {
 
       const searchMatches =
         !query ||
-        [product.name, product.description, product.category].some(
-          (value) => String(value || "").toLowerCase().includes(query)
+        [product.name, product.description, product.category].some((value) =>
+          String(value || "").toLowerCase().includes(query)
         );
 
       return categoryMatches && searchMatches;
@@ -159,11 +222,36 @@ export default function App() {
   }, [products, selectedCategory, search]);
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-
   const cartTotal = cart.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0
   );
+
+  function notify(message, type = "info") {
+    setNotice(message);
+    setNoticeType(type);
+  }
+
+  function openCart() {
+    window.location.hash = "/cart";
+    setView("cart");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function goHome() {
+    window.location.hash = "/";
+    setView("home");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function selectCategory(category) {
+    setSelectedCategory(category);
+    setView("home");
+
+    if (window.location.hash !== "#/") {
+      window.location.hash = "/";
+    }
+  }
 
   function addToCart(product) {
     setCart((current) => {
@@ -179,11 +267,15 @@ export default function App() {
 
       return [
         ...current,
-        { ...product, price: Number(product.price) || 0, quantity: 1 },
+        {
+          ...product,
+          price: Number(product.price) || 0,
+          quantity: 1,
+        },
       ];
     });
 
-    setNotice(`${product.name} cart mein add ho gaya.`);
+    notify(`${product.name} cart mein add ho gaya.`, "success");
   }
 
   function changeQuantity(productId, change) {
@@ -202,13 +294,14 @@ export default function App() {
     setCart((current) =>
       current.filter((item) => item._id !== productId)
     );
+    notify("Product cart se remove kar diya gaya.", "info");
   }
 
   async function handleCheckout() {
     if (checkoutLoading) return;
 
     if (cart.length === 0) {
-      setNotice("Checkout se pehle cart mein products add karein.");
+      notify("Checkout se pehle cart mein products add karein.", "error");
       return;
     }
 
@@ -220,11 +313,10 @@ export default function App() {
 
       if (!scriptLoaded) {
         throw new Error(
-          "Razorpay Checkout load nahi hua. Internet connection check karein."
+          "Razorpay checkout load nahi hua. Internet connection check karein."
         );
       }
 
-      // The backend calculates prices from MongoDB.
       const orderResponse = await fetch(
         `${API_URL}/api/payment/create-order`,
         {
@@ -239,16 +331,18 @@ export default function App() {
         }
       );
 
-      const orderData = await orderResponse.json();
+      const orderData = await readResponse(orderResponse);
 
       if (!orderResponse.ok) {
         throw new Error(
-          orderData.message || "Razorpay order create nahi hua."
+          orderData.message || "Payment order create nahi hua."
         );
       }
 
       if (!orderData.orderId || !orderData.keyId || !orderData.amount) {
-        throw new Error("Backend ne incomplete payment order return kiya.");
+        throw new Error(
+          "Backend ne incomplete payment order return kiya."
+        );
       }
 
       const options = {
@@ -256,40 +350,50 @@ export default function App() {
         amount: orderData.amount,
         currency: orderData.currency || "INR",
         name: "SaurabKart",
-        description: "SaurabKart shopping order",
+        description: "Your everyday shopping destination",
         order_id: orderData.orderId,
+        image: "/favicon.ico",
+        theme: { color: "#2457e6" },
+
+        prefill: {},
+        notes: { source: "SaurabKart website" },
 
         handler: async function (paymentResponse) {
-          setCheckoutLoading(true);
-          setNotice("Payment verify ho raha hai...");
-
           try {
             const verifyResponse = await fetch(
               `${API_URL}/api/payment/verify`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(paymentResponse),
+                body: JSON.stringify({
+                  razorpay_order_id: paymentResponse.razorpay_order_id,
+                  razorpay_payment_id: paymentResponse.razorpay_payment_id,
+                  razorpay_signature: paymentResponse.razorpay_signature,
+                }),
               }
             );
 
-            const verifyData = await verifyResponse.json();
+            const verifyData = await readResponse(verifyResponse);
 
-            if (!verifyResponse.ok || verifyData.status !== "OK") {
+            if (!verifyResponse.ok) {
               throw new Error(
-                verifyData.message ||
-                  "Payment verify nahi hua. Order status check karein."
+                verifyData.message || "Payment verification failed."
               );
             }
 
             setCart([]);
-            setNotice(
-              `Payment successful! Order ID: ${verifyData.orderId}`
+            setView("success");
+            window.location.hash = "/payment-success";
+            notify(
+              "Payment verify ho gayi! Aapka order successful hai.",
+              "success"
             );
-          } catch (err) {
-            console.error("Payment verification error:", err);
-            setNotice(
-              `${err.message} Payment ka status confirm kiye bina dobara payment na karein.`
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          } catch (verifyError) {
+            console.error("Payment verification error:", verifyError);
+            notify(
+              "Payment response mil gaya, lekin verification confirm nahi hui. Dobara payment karne se pehle order status verify karein.",
+              "error"
             );
           } finally {
             setCheckoutLoading(false);
@@ -297,325 +401,542 @@ export default function App() {
         },
 
         modal: {
-          ondismiss: function () {
+          ondismiss: () => {
             setCheckoutLoading(false);
-            setNotice(
-              "Checkout close ho gaya. Payment successful hui ho sakti hai; retry se pehle status verify karein."
+            notify(
+              "Checkout close ho gaya. Payment successful hui ho sakti hai; retry se pehle status verify karein.",
+              "info"
             );
           },
         },
-
-        theme: { color: "#2563eb" },
       };
 
-      const paymentWindow = new window.Razorpay(options);
+      const checkout = new window.Razorpay(options);
 
-      paymentWindow.on("payment.failed", function (response) {
+      checkout.on("payment.failed", function (response) {
+        console.error("Razorpay payment failed:", response.error);
         setCheckoutLoading(false);
-        setNotice(
-          response.error?.description || "Payment fail ho gaya. Dobara try karein."
+        notify(
+          response.error?.description ||
+            "Payment complete nahi hui. Test mode mein dobara try karein.",
+          "error"
         );
       });
 
-      paymentWindow.open();
+      checkout.open();
     } catch (err) {
       console.error("Checkout error:", err);
-      setNotice(err.message || "Checkout start nahi ho saka.");
+      notify(err.message || "Checkout start nahi ho saka.", "error");
       setCheckoutLoading(false);
     }
   }
 
+  function scrollToProducts() {
+    document.getElementById("products")?.scrollIntoView({
+      behavior: "smooth",
+    });
+  }
+
   return (
-    <div className="app">
-      <header className="top-header">
-        <a
-          className="brand"
-          href="#home"
-          onClick={() => {
-            setSelectedCategory("All");
-            setSearch("");
-          }}
-        >
-          <span className="brand-icon">🛍️</span>
-          <span>
-            Saurab<span className="brand-highlight">Kart</span>
+    <div className="app-shell">
+      <div className="announcement-bar">
+        <div className="container announcement-inner">
+          <span>✨ Everyday essentials, all in one place</span>
+          <span className="announcement-right">
+            <span>Secure checkout</span>
+            <span className="announcement-dot">•</span>
+            <span>Razorpay Test Mode</span>
           </span>
-        </a>
-
-        <div className="header-search">
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search products, brands and more..."
-            aria-label="Search products"
-          />
-          <button type="button" className="search-button" aria-label="Search">
-            🔍
-          </button>
         </div>
+      </div>
 
-        <a className="cart-link" href="#cart">
-          🛒 Cart <span className="cart-count">{cartCount}</span>
-        </a>
-      </header>
-
-      <nav className="category-nav" aria-label="Product categories">
-        {categories.map((category) => (
-          <button
-            type="button"
-            key={category}
-            className={
-              selectedCategory === category
-                ? "category-button active"
-                : "category-button"
-            }
-            onClick={() => setSelectedCategory(category)}
-          >
-            {category}
+      <header className="site-header">
+        <div className="container header-main">
+          <button className="brand" type="button" onClick={goHome}>
+            <span className="brand-mark">S</span>
+            <span className="brand-name">
+              Saurab<span>Kart</span>
+            </span>
           </button>
-        ))}
-      </nav>
 
-      <main id="home">
-        <section className="hero">
-          <div className="hero-content">
-            <span className="hero-tag">WELCOME TO SAURABKART</span>
-            <h1>Everything You Love, All in One Place.</h1>
-            <p>
-              Electronics se fashion, home essentials aur books tak —
-              apne favourite products ek hi jagah explore karein.
-            </p>
-            <button
-              type="button"
-              className="hero-button"
-              onClick={() => {
-                setSelectedCategory("All");
-                document
-                  .getElementById("products")
-                  ?.scrollIntoView({ behavior: "smooth" });
-              }}
-            >
-              Shop Now →
-            </button>
-          </div>
-          <div className="hero-art" aria-hidden="true">
-            <span>🎧</span>
-            <span>👟</span>
-            <span>📱</span>
-            <span>⌚</span>
-          </div>
-        </section>
-
-        <section className="products-section" id="products">
-          <div className="section-heading">
-            <div>
-              <p className="section-eyebrow">OUR COLLECTION</p>
-              <h2>
-                {selectedCategory === "All"
-                  ? "Explore Products"
-                  : selectedCategory}
-              </h2>
-              <p className="product-count">
-                {loading
-                  ? "Products load ho rahe hain..."
-                  : `${filteredProducts.length} products found`}
-              </p>
-            </div>
-
-            <select
-              aria-label="Filter by category"
-              value={selectedCategory}
-              onChange={(event) => setSelectedCategory(event.target.value)}
-            >
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {notice && (
-            <div className="notice" role="status">
-              <span>{notice}</span>
+          <form
+            className="search-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              goHome();
+              scrollToProducts();
+            }}
+          >
+            <span className="search-icon" aria-hidden="true">
+              ⌕
+            </span>
+            <input
+              aria-label="Search products"
+              type="search"
+              placeholder="Search products, brands and more..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            {search && (
               <button
                 type="button"
-                onClick={() => setNotice("")}
-                aria-label="Dismiss notification"
+                className="clear-search"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
               >
                 ×
               </button>
-            </div>
-          )}
+            )}
+            <button type="submit" className="search-button">
+              Search
+            </button>
+          </form>
 
-          {loading && (
-            <div className="empty-state">
-              <span className="loading-spinner" />
-              <p>Products load ho rahe hain...</p>
+          <div className="header-actions">
+            <div className="trust-label">
+              <span className="trust-check">✓</span>
+              <span>Shop with confidence</span>
             </div>
-          )}
-
-          {!loading && error && (
-            <div className="empty-state">
-              <h3>Something went wrong</h3>
-              <p>{error}</p>
-              <button
-                type="button"
-                className="add-button"
-                onClick={() => window.location.reload()}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {!loading && !error && filteredProducts.length === 0 && (
-            <div className="empty-state">
-              <span>🔎</span>
-              <h3>No products found</h3>
-              <p>Search badlein ya doosri category select karein.</p>
-              <button
-                type="button"
-                className="add-button"
-                onClick={() => {
-                  setSearch("");
-                  setSelectedCategory("All");
-                }}
-              >
-                Show All Products
-              </button>
-            </div>
-          )}
-
-          {!loading && !error && filteredProducts.length > 0 && (
-            <div className="products">
-              {filteredProducts.map((product) => (
-                <article className="product-card" key={product._id}>
-                  <ProductImage product={product} />
-                  <div className="product-info">
-                    <span className="product-category">
-                      {product.category || "Other"}
-                    </span>
-                    <h3>{product.name}</h3>
-                    <p className="product-description">
-                      {product.description || "Quality product from SaurabKart."}
-                    </p>
-                    <div className="product-price">
-                      {formatPrice(product.price)}
-                    </div>
-                    <button
-                      type="button"
-                      className="add-button"
-                      onClick={() => addToCart(product)}
-                    >
-                      + Add to Cart
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="cart-section" id="cart">
-          <div className="section-heading">
-            <div>
-              <p className="section-eyebrow">YOUR SELECTION</p>
-              <h2>Your Shopping Cart ({cartCount})</h2>
-            </div>
+            <button className="cart-button" type="button" onClick={openCart}>
+              <span className="cart-icon">🛒</span>
+              <span>Cart</span>
+              <span className="cart-badge">{cartCount}</span>
+            </button>
           </div>
+        </div>
 
-          {cart.length === 0 ? (
-            <div className="cart-empty">
-              <span>🛒</span>
-              <p>Your cart is empty. Add products to get started!</p>
+        <nav className="category-nav" aria-label="Product categories">
+          <div className="container category-nav-inner">
+            {categories.map((category) => (
+              <button
+                type="button"
+                key={category.name}
+                className={`category-link ${
+                  selectedCategory === category.name ? "active" : ""
+                }`}
+                onClick={() => selectCategory(category.name)}
+              >
+                <span className="category-nav-icon">{category.icon}</span>
+                {category.name}
+              </button>
+            ))}
+          </div>
+        </nav>
+      </header>
+
+      <main>
+        {view === "cart" ? (
+          <section className="container cart-page">
+            <div className="page-heading">
+              <div>
+                <span className="eyebrow">YOUR SELECTION</span>
+                <h1>Your shopping cart</h1>
+                <p>Review your items before checking out.</p>
+              </div>
+              <button className="text-button" type="button" onClick={goHome}>
+                ← Continue shopping
+              </button>
             </div>
-          ) : (
-            <div className="cart-content">
-              <div className="cart-items">
-                {cart.map((item) => (
-                  <div className="cart-item" key={item._id}>
-                    <div className="cart-item-info">
-                      <strong>{item.name}</strong>
-                      <span>{formatPrice(item.price)} each</span>
-                    </div>
 
-                    <div className="quantity-controls">
-                      <button
-                        type="button"
-                        onClick={() => changeQuantity(item._id, -1)}
-                        aria-label={`Decrease ${item.name} quantity`}
-                      >
-                        −
-                      </button>
-                      <span>{item.quantity}</span>
-                      <button
-                        type="button"
-                        onClick={() => changeQuantity(item._id, 1)}
-                        aria-label={`Increase ${item.name} quantity`}
-                      >
-                        +
-                      </button>
-                    </div>
+            {cart.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">🛍️</div>
+                <h2>Your cart is waiting for something lovely</h2>
+                <p>Explore the collection and add your favourite products.</p>
+                <button className="primary-button" onClick={goHome}>
+                  Explore products <span>→</span>
+                </button>
+              </div>
+            ) : (
+              <div className="cart-layout">
+                <div className="cart-items-panel">
+                  <div className="panel-heading">
+                    <h2>Cart items</h2>
+                    <span>{cartCount} item(s)</span>
+                  </div>
 
-                    <strong className="cart-item-total">
-                      {formatPrice(item.price * item.quantity)}
-                    </strong>
+                  {cart.map((item) => (
+                    <article className="cart-item" key={item._id}>
+                      <div className="cart-item-image">
+                        <ProductImage product={item} />
+                      </div>
+                      <div className="cart-item-info">
+                        <span className="product-category">
+                          {item.category || "Everyday essentials"}
+                        </span>
+                        <h3>{item.name}</h3>
+                        <p className="cart-item-price">
+                          {formatPrice(item.price)}
+                        </p>
+                        <button
+                          className="remove-button"
+                          type="button"
+                          onClick={() => removeFromCart(item._id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="cart-item-right">
+                        <div className="quantity-control">
+                          <button
+                            type="button"
+                            onClick={() => changeQuantity(item._id, -1)}
+                            aria-label={`Decrease quantity of ${item.name}`}
+                          >
+                            −
+                          </button>
+                          <span>{item.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => changeQuantity(item._id, 1)}
+                            aria-label={`Increase quantity of ${item.name}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                        <strong>
+                          {formatPrice(item.price * item.quantity)}
+                        </strong>
+                      </div>
+                    </article>
+                  ))}
+                </div>
 
+                <aside className="order-summary">
+                  <h2>Order summary</h2>
+                  <div className="summary-row">
+                    <span>Subtotal ({cartCount} items)</span>
+                    <span>{formatPrice(cartTotal)}</span>
+                  </div>
+                  <div className="summary-row">
+                    <span>Delivery</span>
+                    <span className="free-delivery">Calculated at checkout</span>
+                  </div>
+                  <div className="summary-divider" />
+                  <div className="summary-total">
+                    <span>Total</span>
+                    <strong>{formatPrice(cartTotal)}</strong>
+                  </div>
+                  <button
+                    className="primary-button checkout-button"
+                    type="button"
+                    onClick={handleCheckout}
+                    disabled={checkoutLoading}
+                  >
+                    {checkoutLoading ? (
+                      <>
+                        <span className="button-spinner" />
+                        Preparing checkout...
+                      </>
+                    ) : (
+                      <>
+                        Pay securely with Razorpay <span>→</span>
+                      </>
+                    )}
+                  </button>
+                  <div className="secure-note">
+                    <span>🔒</span>
+                    <span>Secure payment powered by Razorpay</span>
+                  </div>
+                  <div className="test-mode-note">
+                    Test Mode checkout
+                  </div>
+                </aside>
+              </div>
+            )}
+          </section>
+        ) : view === "success" ? (
+          <section className="container success-page">
+            <div className="success-card">
+              <div className="success-check">✓</div>
+              <span className="eyebrow">PAYMENT CONFIRMED</span>
+              <h1>Thank you for your order!</h1>
+              <p>
+                Your payment has been verified. Thanks for shopping with
+                SaurabKart.
+              </p>
+              <button className="primary-button" onClick={goHome}>
+                Continue shopping <span>→</span>
+              </button>
+            </div>
+          </section>
+        ) : (
+          <>
+            <section className="container hero-section">
+              <div className="hero-copy">
+                <span className="eyebrow hero-eyebrow">
+                  WELCOME TO SAURABKART
+                </span>
+                <h1>
+                  Everything you love,
+                  <br />
+                  <span>all in one place.</span>
+                </h1>
+                <p>
+                  From everyday essentials to little luxuries, discover
+                  products that make life better.
+                </p>
+                <div className="hero-actions">
+                  <button
+                    className="primary-button hero-button"
+                    onClick={scrollToProducts}
+                  >
+                    Explore collection <span>→</span>
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => selectCategory("Electronics")}
+                  >
+                    Shop electronics
+                  </button>
+                </div>
+                <div className="hero-benefits">
+                  <span>
+                    <b>✓</b> Easy shopping
+                  </span>
+                  <span>
+                    <b>✓</b> Secure checkout
+                  </span>
+                </div>
+              </div>
+
+              <div className="hero-art" aria-label="Shopping categories">
+                <div className="hero-orbit orbit-one" />
+                <div className="hero-orbit orbit-two" />
+                <div className="hero-art-card hero-art-card-main">
+                  <span className="hero-art-emoji">🛍️</span>
+                  <div>
+                    <span className="hero-art-label">YOUR EVERYDAY</span>
+                    <strong>Shopping, simplified.</strong>
+                  </div>
+                </div>
+                <div className="floating-product floating-laptop">💻</div>
+                <div className="floating-product floating-fashion">👟</div>
+                <div className="floating-product floating-phone">📱</div>
+                <div className="floating-product floating-home">🏡</div>
+                <div className="hero-art-tag">
+                  <span className="tag-sparkle">✦</span>
+                  Find your favourites
+                </div>
+              </div>
+
+              <div className="hero-bottom-shape" />
+            </section>
+
+            <section className="container benefits-strip">
+              <div className="benefit-item">
+                <span className="benefit-icon">🚚</span>
+                <div>
+                  <strong>Convenient shopping</strong>
+                  <span>Browse all in one place</span>
+                </div>
+              </div>
+              <div className="benefit-item">
+                <span className="benefit-icon">🔒</span>
+                <div>
+                  <strong>Secure checkout</strong>
+                  <span>Payment powered by Razorpay</span>
+                </div>
+              </div>
+              <div className="benefit-item">
+                <span className="benefit-icon">💫</span>
+                <div>
+                  <strong>Made for you</strong>
+                  <span>Explore products you love</span>
+                </div>
+              </div>
+            </section>
+
+            <section className="container categories-section">
+              <div className="section-heading">
+                <div>
+                  <span className="eyebrow">FIND YOUR FAVOURITES</span>
+                  <h2>Shop by category</h2>
+                </div>
+                <span className="section-side-note">A little something for everyone</span>
+              </div>
+
+              <div className="category-tiles">
+                {categories
+                  .filter((category) => category.name !== "All")
+                  .map((category) => (
                     <button
+                      className={`category-tile tile-${(
+                        categoryColors[category.name] || "blue"
+                      )} ${
+                        selectedCategory === category.name ? "selected" : ""
+                      }`}
+                      key={category.name}
                       type="button"
-                      className="remove-button"
-                      onClick={() => removeFromCart(item._id)}
+                      onClick={() => {
+                        selectCategory(category.name);
+                        scrollToProducts();
+                      }}
                     >
-                      Remove
+                      <span className="category-tile-icon">
+                        {category.icon}
+                      </span>
+                      <span>{category.name}</span>
+                      <span className="tile-arrow">↗</span>
+                    </button>
+                  ))}
+              </div>
+            </section>
+
+            <section className="container products-section" id="products">
+              <div className="section-heading products-heading">
+                <div>
+                  <span className="eyebrow">OUR COLLECTION</span>
+                  <h2>
+                    {search.trim()
+                      ? "Search results"
+                      : selectedCategory === "All"
+                      ? "Explore products"
+                      : selectedCategory}
+                  </h2>
+                  <p>
+                    {search.trim()
+                      ? `Results for "${search.trim()}"`
+                      : "Discover something you'll love."}
+                  </p>
+                </div>
+                <div className="product-count">
+                  {loading
+                    ? "Loading..."
+                    : `${filteredProducts.length} products`}
+                </div>
+              </div>
+
+              {error && (
+                <div className="error-banner">
+                  <span>⚠️</span>
+                  <div>
+                    <strong>Unable to load products</strong>
+                    <p>{error}</p>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => window.location.reload()}
+                    >
+                      Try again
                     </button>
                   </div>
-                ))}
+                </div>
+              )}
+
+              {loading ? (
+                <div className="product-grid">
+                  {Array.from({ length: 8 }).map((_, index) => (
+                    <div className="skeleton-card" key={index}>
+                      <div className="skeleton-image" />
+                      <div className="skeleton-line" />
+                      <div className="skeleton-line short" />
+                      <div className="skeleton-line price-line" />
+                    </div>
+                  ))}
+                </div>
+              ) : filteredProducts.length === 0 ? (
+                <div className="empty-state compact-empty">
+                  <div className="empty-icon">🔎</div>
+                  <h2>No products found</h2>
+                  <p>Try a different search or choose another category.</p>
+                  <button
+                    className="primary-button"
+                    onClick={() => {
+                      setSearch("");
+                      setSelectedCategory("All");
+                    }}
+                  >
+                    Show all products
+                  </button>
+                </div>
+              ) : (
+                <div className="product-grid">
+                  {filteredProducts.map((product) => (
+                    <article className="product-card" key={product._id}>
+                      <div className="product-card-image-wrap">
+                        <ProductImage product={product} />
+                        <span className="product-badge">JUST FOR YOU</span>
+                        <button
+                          className="quick-add"
+                          type="button"
+                          onClick={() => addToCart(product)}
+                          aria-label={`Add ${product.name} to cart`}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className="product-card-content">
+                        <span className="product-category">
+                          {product.category || "Everyday essentials"}
+                        </span>
+                        <h3 title={product.name}>{product.name}</h3>
+                        <p className="product-description">
+                          {product.description ||
+                            "A great addition to your everyday collection."}
+                        </p>
+                        <div className="product-card-bottom">
+                          <strong className="product-price">
+                            {formatPrice(product.price)}
+                          </strong>
+                          <button
+                            className="add-to-cart-button"
+                            type="button"
+                            onClick={() => addToCart(product)}
+                          >
+                            Add to cart <span>+</span>
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="container bottom-promo">
+              <div className="promo-icon">✦</div>
+              <div>
+                <span className="eyebrow">YOUR NEXT FAVOURITE IS HERE</span>
+                <h2>Good finds. Easy shopping.</h2>
+                <p>Explore the collection and find something just right for you.</p>
               </div>
-
-              <div className="cart-summary">
-                <h3>Order Summary</h3>
-                <div className="summary-row">
-                  <span>Items ({cartCount})</span>
-                  <span>{formatPrice(cartTotal)}</span>
-                </div>
-                <div className="summary-row">
-                  <span>Delivery</span>
-                  <span>Calculated at checkout</span>
-                </div>
-                <div className="summary-total">
-                  <span>Subtotal</span>
-                  <strong>{formatPrice(cartTotal)}</strong>
-                </div>
-
-                <button
-                  type="button"
-                  className="checkout-button"
-                  onClick={handleCheckout}
-                  disabled={checkoutLoading}
-                >
-                  {checkoutLoading
-                    ? "Please wait..."
-                    : "Pay Securely with Razorpay →"}
-                </button>
-
-                <p className="checkout-note">
-                  Razorpay Test Mode checkout.
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
+              <button className="primary-button" onClick={scrollToProducts}>
+                Browse products <span>→</span>
+              </button>
+            </section>
+          </>
+        )}
       </main>
 
       <footer className="site-footer">
-        <a className="footer-brand" href="#home">
-          SaurabKart
-        </a>
-        <p>Your everyday shopping destination.</p>
-        <p>© {new Date().getFullYear()} SaurabKart. All rights reserved.</p>
+        <div className="container footer-main">
+          <button className="brand footer-brand" onClick={goHome} type="button">
+            <span className="brand-mark">S</span>
+            <span className="brand-name">
+              Saurab<span>Kart</span>
+            </span>
+          </button>
+          <p>Your everyday shopping destination.</p>
+          <div className="footer-links">
+            <button type="button" onClick={goHome}>Home</button>
+            <button type="button" onClick={openCart}>Shopping cart</button>
+            <button type="button" onClick={() => selectCategory("Electronics")}>
+              Electronics
+            </button>
+          </div>
+        </div>
+        <div className="container footer-bottom">
+          <span>© {new Date().getFullYear()} SaurabKart. All rights reserved.</span>
+          <span>Secure checkout powered by Razorpay</span>
+        </div>
       </footer>
+
+      <Toast
+        message={notice}
+        type={noticeType}
+        onClose={() => setNotice("")}
+      />
     </div>
   );
 }
