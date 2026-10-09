@@ -24,10 +24,40 @@ function formatPrice(price) {
   }).format(Number(price) || 0);
 }
 
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) {
+      resolve(true);
+      return;
+    }
+
+    const existingScript = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(true), {
+        once: true,
+      });
+      existingScript.addEventListener("error", () => resolve(false), {
+        once: true,
+      });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 function ProductImage({ product }) {
   const [imageFailed, setImageFailed] = useState(false);
 
-  const categoryIcons = {
+  const icons = {
     Electronics: "💻",
     Mobiles: "📱",
     Fashion: "👕",
@@ -41,7 +71,7 @@ function ProductImage({ product }) {
   if (!product.image || imageFailed) {
     return (
       <div className="product-image product-image-fallback">
-        <span>{categoryIcons[product.category] || "🛍️"}</span>
+        <span>{icons[product.category] || "🛍️"}</span>
       </div>
     );
   }
@@ -64,6 +94,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -78,29 +109,26 @@ export default function App() {
         const response = await fetch(`${API_URL}/api/products`);
 
         if (!response.ok) {
-          throw new Error(`Products API returned ${response.status}`);
+          throw new Error("Products API request failed");
         }
 
         const data = await response.json();
 
         if (!Array.isArray(data)) {
-          throw new Error("Invalid products response from server");
+          throw new Error("Invalid products response");
         }
 
-        if (active) {
-          setProducts(data);
-        }
+        if (active) setProducts(data);
       } catch (err) {
+        console.error("Products loading error:", err);
+
         if (active) {
           setError(
-            "Products load nahi ho paaye. Please internet aur backend check karein."
+            "Products load nahi ho paaye. Backend aur internet connection check karein."
           );
-          console.error("Products loading error:", err);
         }
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
@@ -112,46 +140,37 @@ export default function App() {
   }, []);
 
   const filteredProducts = useMemo(() => {
-    const searchText = search.trim().toLowerCase();
+    const query = search.trim().toLowerCase();
 
     return products.filter((product) => {
-      const categoryMatch =
+      const categoryMatches =
         selectedCategory === "All" ||
         String(product.category || "").toLowerCase() ===
           selectedCategory.toLowerCase();
 
-      const searchMatch =
-        !searchText ||
-        [
-          product.name,
-          product.description,
-          product.category,
-        ].some((value) =>
-          String(value || "").toLowerCase().includes(searchText)
+      const searchMatches =
+        !query ||
+        [product.name, product.description, product.category].some(
+          (value) => String(value || "").toLowerCase().includes(query)
         );
 
-      return categoryMatch && searchMatch;
+      return categoryMatches && searchMatches;
     });
   }, [products, selectedCategory, search]);
 
-  const cartCount = cart.reduce(
-    (total, item) => total + item.quantity,
-    0
-  );
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const cartTotal = cart.reduce(
-    (total, item) => total + item.price * item.quantity,
+    (sum, item) => sum + item.price * item.quantity,
     0
   );
 
   function addToCart(product) {
-    setCart((currentCart) => {
-      const existingItem = currentCart.find(
-        (item) => item._id === product._id
-      );
+    setCart((current) => {
+      const existing = current.find((item) => item._id === product._id);
 
-      if (existingItem) {
-        return currentCart.map((item) =>
+      if (existing) {
+        return current.map((item) =>
           item._id === product._id
             ? { ...item, quantity: item.quantity + 1 }
             : item
@@ -159,12 +178,8 @@ export default function App() {
       }
 
       return [
-        ...currentCart,
-        {
-          ...product,
-          price: Number(product.price) || 0,
-          quantity: 1,
-        },
+        ...current,
+        { ...product, price: Number(product.price) || 0, quantity: 1 },
       ];
     });
 
@@ -172,8 +187,8 @@ export default function App() {
   }
 
   function changeQuantity(productId, change) {
-    setCart((currentCart) =>
-      currentCart
+    setCart((current) =>
+      current
         .map((item) =>
           item._id === productId
             ? { ...item, quantity: item.quantity + change }
@@ -184,20 +199,130 @@ export default function App() {
   }
 
   function removeFromCart(productId) {
-    setCart((currentCart) =>
-      currentCart.filter((item) => item._id !== productId)
+    setCart((current) =>
+      current.filter((item) => item._id !== productId)
     );
   }
 
-  function handleCheckout() {
+  async function handleCheckout() {
+    if (checkoutLoading) return;
+
     if (cart.length === 0) {
       setNotice("Checkout se pehle cart mein products add karein.");
       return;
     }
 
-    setNotice(
-      "Cart ready hai. Online payment aur order placement abhi integrate nahi hain."
-    );
+    setCheckoutLoading(true);
+    setNotice("");
+
+    try {
+      const scriptLoaded = await loadRazorpayScript();
+
+      if (!scriptLoaded) {
+        throw new Error(
+          "Razorpay Checkout load nahi hua. Internet connection check karein."
+        );
+      }
+
+      // The backend calculates prices from MongoDB.
+      const orderResponse = await fetch(
+        `${API_URL}/api/payment/create-order`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: cart.map((item) => ({
+              productId: item._id,
+              quantity: item.quantity,
+            })),
+          }),
+        }
+      );
+
+      const orderData = await orderResponse.json();
+
+      if (!orderResponse.ok) {
+        throw new Error(
+          orderData.message || "Razorpay order create nahi hua."
+        );
+      }
+
+      if (!orderData.orderId || !orderData.keyId || !orderData.amount) {
+        throw new Error("Backend ne incomplete payment order return kiya.");
+      }
+
+      const options = {
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: orderData.currency || "INR",
+        name: "SaurabKart",
+        description: "SaurabKart shopping order",
+        order_id: orderData.orderId,
+
+        handler: async function (paymentResponse) {
+          setCheckoutLoading(true);
+          setNotice("Payment verify ho raha hai...");
+
+          try {
+            const verifyResponse = await fetch(
+              `${API_URL}/api/payment/verify`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(paymentResponse),
+              }
+            );
+
+            const verifyData = await verifyResponse.json();
+
+            if (!verifyResponse.ok || verifyData.status !== "OK") {
+              throw new Error(
+                verifyData.message ||
+                  "Payment verify nahi hua. Order status check karein."
+              );
+            }
+
+            setCart([]);
+            setNotice(
+              `Payment successful! Order ID: ${verifyData.orderId}`
+            );
+          } catch (err) {
+            console.error("Payment verification error:", err);
+            setNotice(
+              `${err.message} Payment ka status confirm kiye bina dobara payment na karein.`
+            );
+          } finally {
+            setCheckoutLoading(false);
+          }
+        },
+
+        modal: {
+          ondismiss: function () {
+            setCheckoutLoading(false);
+            setNotice(
+              "Checkout close ho gaya. Payment successful hui ho sakti hai; retry se pehle status verify karein."
+            );
+          },
+        },
+
+        theme: { color: "#2563eb" },
+      };
+
+      const paymentWindow = new window.Razorpay(options);
+
+      paymentWindow.on("payment.failed", function (response) {
+        setCheckoutLoading(false);
+        setNotice(
+          response.error?.description || "Payment fail ho gaya. Dobara try karein."
+        );
+      });
+
+      paymentWindow.open();
+    } catch (err) {
+      console.error("Checkout error:", err);
+      setNotice(err.message || "Checkout start nahi ho saka.");
+      setCheckoutLoading(false);
+    }
   }
 
   return (
@@ -225,11 +350,7 @@ export default function App() {
             placeholder="Search products, brands and more..."
             aria-label="Search products"
           />
-          <button
-            type="button"
-            className="search-button"
-            aria-label="Search"
-          >
+          <button type="button" className="search-button" aria-label="Search">
             🔍
           </button>
         </div>
@@ -262,8 +383,8 @@ export default function App() {
             <span className="hero-tag">WELCOME TO SAURABKART</span>
             <h1>Everything You Love, All in One Place.</h1>
             <p>
-              Electronics se lekar fashion, home essentials aur books tak
-              — apni pasand ke products ek hi jagah explore karein.
+              Electronics se fashion, home essentials aur books tak —
+              apne favourite products ek hi jagah explore karein.
             </p>
             <button
               type="button"
@@ -372,22 +493,17 @@ export default function App() {
               {filteredProducts.map((product) => (
                 <article className="product-card" key={product._id}>
                   <ProductImage product={product} />
-
                   <div className="product-info">
                     <span className="product-category">
                       {product.category || "Other"}
                     </span>
-
                     <h3>{product.name}</h3>
-
                     <p className="product-description">
                       {product.description || "Quality product from SaurabKart."}
                     </p>
-
                     <div className="product-price">
                       {formatPrice(product.price)}
                     </div>
-
                     <button
                       type="button"
                       className="add-button"
@@ -472,15 +588,20 @@ export default function App() {
                   <span>Subtotal</span>
                   <strong>{formatPrice(cartTotal)}</strong>
                 </div>
+
                 <button
                   type="button"
                   className="checkout-button"
                   onClick={handleCheckout}
+                  disabled={checkoutLoading}
                 >
-                  Proceed to Checkout →
+                  {checkoutLoading
+                    ? "Please wait..."
+                    : "Pay Securely with Razorpay →"}
                 </button>
+
                 <p className="checkout-note">
-                  Online payment is not enabled yet.
+                  Razorpay Test Mode checkout.
                 </p>
               </div>
             </div>
@@ -492,9 +613,7 @@ export default function App() {
         <a className="footer-brand" href="#home">
           SaurabKart
         </a>
-        <p>
-          Your everyday shopping destination.
-        </p>
+        <p>Your everyday shopping destination.</p>
         <p>© {new Date().getFullYear()} SaurabKart. All rights reserved.</p>
       </footer>
     </div>
